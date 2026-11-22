@@ -6,7 +6,9 @@ readme = "README.md"
 requires-python = ">=3.12"
 # Runtime dependencies. Empty on purpose in Phase 0: each library is added
 # in the step where we learn it (e.g. pyiceberg in step 1).
-dependencies = []
+dependencies = [
+    "pyiceberg[pyarrow,sql-sqlite]>=0.12.0",
+]
 
 [dependency-groups]
 # Development-only tools: not needed to *run* the pipeline, only to develop it.

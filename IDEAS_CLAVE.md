@@ -10,8 +10,19 @@
    archivos Parquet forman la tabla en cada momento.
 2. Cada escritura crea un **snapshot** nuevo sin modificar nada anterior → de ahí salen
    **time travel** y **ACID** (los lectores siempre ven un snapshot completo y consistente).
-3. Jerarquía: **catálogo → metadata.json → manifest list → manifests → data files**.
+3. ✅ Jerarquía: **catálogo → metadata.json → manifest list → manifests → data files**.
    El catálogo solo guarda un **puntero** al `metadata.json` actual.
+4. ✅ **Un commit = escribir archivos nuevos + mover el puntero del catálogo de forma atómica**
+   (compare-and-swap). Si otro escribió antes, el commit falla y se reintenta (*optimistic concurrency*).
+   Nada se modifica: todo se añade (encaja con S3 inmutable).
+5. ✅ **Un snapshot es una foto completa, no un diff**: su manifest list reutiliza manifests anteriores.
+   Time travel = empezar la lectura desde la manifest list de otro snapshot. No se copia nada.
+6. ✅ Los **manifests guardan min/max por columna y archivo** → el motor salta archivos sin abrirlos
+   (*file pruning*) y **sin listar S3**.
+7. ✅ Las tablas son **archivos autodescriptivos**: si pierdes el catálogo, no pierdes datos
+   (`register_table` con el último metadata.json). Pero el catálogo es la *source of truth* del
+   metadata.json vigente → necesita backup.
+8. ✅ Coste: muchos commits pequeños → muchos archivos pequeños (*small files problem*) → **compaction**.
 
 ## 🗂️ AWS Glue Data Catalog (el catálogo)
 1. Es el **catálogo**: sabe qué tablas existen y dónde está su `metadata.json` actual.
@@ -37,3 +48,8 @@
 ## 🧰 Buenas prácticas transversales
 1. **Reproducibilidad**: versiones fijadas (`uv.lock`, tags de imágenes Docker, semillas aleatorias).
 2. **Secretos** fuera del código y de Git (`.env` local ↔ Secrets Manager en AWS).
+3. ✅ **Nunca esconder errores** (`except:` desnudo): un pipeline que oculta fallos no es auditable.
+   Captura solo lo que sabes manejar; lo demás, que suba.
+4. ✅ **Timestamps siempre en UTC con zona explícita** (ALCOA+ *Contemporaneous*).
+5. ✅ **Configuración del catálogo aislada** en un solo sitio (`get_catalog()`): SQLite → REST → Glue
+   sin tocar el pipeline.

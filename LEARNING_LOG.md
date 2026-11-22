@@ -27,3 +27,46 @@ qué aprendimos, decisiones y por qué, errores y cómo se resolvieron.
   quitar con `conda deactivate` (o `conda config --set auto_activate_base false`).
 
 **Hecho cuando** ✅ `uv run pytest` → 1 passed · `ruff check` → All checks passed · primer commit.
+
+---
+
+## Paso 1: Iceberg sin nada alrededor (22/11/2026)
+
+**Qué hicimos**
+- `pyiceberg[pyarrow,sql-sqlite]` 0.12.0. Catálogo **SQL (SQLite)** + warehouse en carpeta local `.warehouse/`.
+- `get_catalog()` en `src/neural_lakehouse/lakehouse/catalog.py`: **único punto** que sabe qué catálogo usamos.
+- Tabla de juguete `toy.readings` (3 columnas con `field_id`), 3 appends → 3 snapshots.
+- Recorrimos la cadena a mano: `catalog.db` → `00003.metadata.json` → `snap-....avro` (manifest list)
+  → `...-m0.avro` (manifests) → `.parquet`.
+- Demo: borramos `catalog.db` → `NoSuchTableError`, pero los 13 archivos seguían ahí →
+  `register_table()` con el último metadata.json → 6 filas y 3 snapshots recuperados.
+- Ejercicio (Júlia): `list_snapshots()` en `playground/exercise_list_snapshots.py`.
+
+**Lo que observamos**
+- 1 append = 1 Parquet + 1 manifest + 1 manifest list + 1 metadata.json. **Nada se modifica, todo se añade.**
+- 6 filas → 13 archivos: *small files problem* → hará falta **compaction**.
+- La manifest list del snapshot 3 apunta a los 3 manifests (reutiliza, no copia): un snapshot es una
+  **foto completa**, no un diff → time travel barato.
+- Los manifests guardan **min/max por columna y archivo** → *file pruning* sin abrir Parquet ni listar S3.
+- El catálogo guarda `metadata_location` y `previous_metadata_location`: el commit es un
+  **compare-and-swap** del puntero (optimistic concurrency).
+
+**Decisiones y por qué**
+- Rutas absolutas calculadas desde la raíz del repo en `get_catalog()` (en vez de `.pyiceberg.yaml`)
+  para que funcione desde cualquier directorio y haya un solo sitio que cambiar (→ REST → Glue).
+- Columnas `required=False` en la tabla de juguete para no pelearnos con la nulabilidad de PyArrow.
+
+**Errores y soluciones**
+- Ejercicio v1: `try/except:` desnudo que convertía cualquier error en `NotImplementedError` →
+  **esconde la causa**. Quitado. En v2 el error real (`'Snapshot' object has no attribute 'get'`)
+  señaló la línea exacta: `added-records` está en `snap.summary`, no en `snap`.
+- Timestamps sin zona: `fromtimestamp(ms/1000)` da hora local (11:47) en vez de UTC (10:47).
+  → siempre `tz=datetime.UTC`.
+- `summary['operation']` es un enum → `.value` para obtener `"append"`.
+- No hay `fastavro` instalado: para leer los Avro de Iceberg usamos la propia API de PyIceberg
+  (`snapshot.manifests(io)`, `manifest.fetch_manifest_entry(io)`).
+
+**Respuestas mejoradas (entrevista)**
+- *Lose the catalog?* → Los datos no se pierden (archivos autodescriptivos, `register_table`), se pierde
+  el **puntero**. Pero el catálogo es la *source of truth* de cuál es el metadata.json vigente
+  (puede haber metadata.json de commits fallidos) → necesita backup.
