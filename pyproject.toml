@@ -1,0 +1,37 @@
+[project]
+name = "neural-lakehouse"
+version = "0.1.0"
+description = "Learning project: a small lakehouse for synthetic neural recording sessions (Iceberg + Airflow + data quality)."
+readme = "README.md"
+requires-python = ">=3.12"
+# Runtime dependencies. Empty on purpose in Phase 0: each library is added
+# in the step where we learn it (e.g. pyiceberg in step 1).
+dependencies = []
+
+[dependency-groups]
+# Development-only tools: not needed to *run* the pipeline, only to develop it.
+dev = [
+    "pytest>=8",
+    "ruff>=0.8",
+]
+
+[build-system]
+requires = ["uv_build>=0.12.7,<0.13.0"]
+build-backend = "uv_build"
+
+# ---------------------------------------------------------------- ruff (lint)
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+# E/F: classic pycodestyle + pyflakes errors
+# I:   import sorting
+# B:   bugbear (likely bugs)
+# UP:  pyupgrade (modern Python syntax)
+select = ["E", "F", "I", "B", "UP"]
+
+# -------------------------------------------------------------- pytest (tests)
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"

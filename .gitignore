@@ -1,0 +1,34 @@
+# --- Secrets: NEVER commit ---
+.env
+*.pem
+*.key
+
+# --- Python ---
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# --- Tool caches ---
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# --- Local data (synthetic, regenerable; never versioned in Git) ---
+# Iceberg local warehouse + catalog DB (steps 1-2)
+.warehouse/
+*.db
+# MinIO / Docker volumes (step 3+)
+.data/
+
+# --- Airflow (step 7) ---
+logs/
+airflow.cfg
+
+# --- OS / editors ---
+.DS_Store
+.idea/
+.vscode/
