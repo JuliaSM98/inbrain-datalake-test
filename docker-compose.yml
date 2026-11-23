@@ -1,12 +1,48 @@
 # Local stand-ins for cloud services. Nothing here costs money or talks to AWS.
 #   storage         -> plays the role of Amazon S3 (RustFS speaks the S3 API)
 #   create-buckets  -> one-shot job: creates the buckets with the official AWS CLI (idempotent)
+#   airflow-*       -> the orchestrator (simplified version of the official Airflow 3.4.0 compose)
 #
 # Usage:  cp .env.example .env   (then edit secrets)
 #         docker compose up -d
-#         docker compose down          # stop (data is kept in the named volume)
-#         docker compose down -v       # stop AND delete all stored objects
+#         docker compose down          # stop (data is kept in the named volumes)
+#         docker compose down -v       # stop AND delete all stored objects + Airflow history
 name: neural-lakehouse
+
+# ---------------------------------------------------------------------------------------------
+# Settings shared by every Airflow container (a YAML "anchor": written once, reused below).
+# ---------------------------------------------------------------------------------------------
+x-airflow-common: &airflow-common
+  build: ./airflow # our image: official Airflow 3.4.0 + our libraries
+  image: neural-lakehouse-airflow:3.4.0
+  environment: &airflow-common-env
+    # LocalExecutor: the scheduler runs the tasks itself (no Redis queue, no Celery workers).
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
+    # The "notebook" (metadata DB) where Airflow writes the history of every run.
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg://airflow:airflow@airflow-db/airflow
+    AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY:-}
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true" # a new DAG starts paused (safe)
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false" # don't load the ~50 example DAGs
+    AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-apiserver:8080/execution/
+    AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_SECRET:?AIRFLOW_JWT_SECRET must be set in .env}
+    AIRFLOW__API_AUTH__JWT_ISSUER: airflow
+    AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: "true"
+    # --- Our project, as seen from inside the Airflow containers ---
+    PYTHONPATH: /opt/project/src # so tasks can `import neural_lakehouse`
+    S3_ENDPOINT: http://storage:9000 # inside Docker, RustFS is "storage", not "localhost"
+    S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+    S3_SECRET_KEY: ${S3_SECRET_KEY}
+    S3_REGION: ${S3_REGION:-us-east-1}
+    LAKEHOUSE_WAREHOUSE: ${LAKEHOUSE_WAREHOUSE:-s3://lakehouse/}
+  volumes:
+    - ./dags:/opt/airflow/dags # the "recipes" (DAG files)
+    - ./.data/airflow/logs:/opt/airflow/logs # task logs (git-ignored)
+    - .:/opt/project # our code, the contract and the catalog (.warehouse/catalog.db)
+  user: "${AIRFLOW_UID:-50000}:0"
+  depends_on: &airflow-common-depends-on
+    airflow-db:
+      condition: service_healthy
 
 services:
   storage:
@@ -53,5 +89,88 @@ services:
         done
     restart: "no"
 
+  # ===========================================================================================
+  # AIRFLOW
+  # ===========================================================================================
+  airflow-db: # the "notebook": history of every DAG run and task
+    image: postgres:16
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow # local only, never exposed outside Docker (no ports:)
+      POSTGRES_DB: airflow
+    volumes:
+      - airflow-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 5s
+      retries: 10
+    restart: unless-stopped
+
+  airflow-init: # "opens the kitchen": prepares the DB and your user, then exits
+    <<: *airflow-common
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        mkdir -p /opt/airflow/logs /opt/airflow/dags
+        chown -R "${AIRFLOW_UID:-50000}:0" /opt/airflow/logs
+        /entrypoint airflow version
+    environment:
+      <<: *airflow-common-env
+      _AIRFLOW_DB_MIGRATE: "true" # create/upgrade the tables of the metadata DB
+      _AIRFLOW_WWW_USER_CREATE: "true" # create the user to log into the web UI
+      _AIRFLOW_WWW_USER_USERNAME: ${AIRFLOW_ADMIN_USER:-airflow}
+      _AIRFLOW_WWW_USER_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD:?AIRFLOW_ADMIN_PASSWORD must be set in .env}
+    user: "0:0"
+    restart: "no"
+
+  airflow-apiserver: # the "window": web UI at http://localhost:8080
+    <<: *airflow-common
+    command: api-server
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/api/v2/monitor/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-scheduler: # the "head chef": decides what runs when (and, with LocalExecutor, runs it)
+    <<: *airflow-common
+    command: scheduler
+    healthcheck:
+      test: ["CMD-SHELL", 'airflow jobs check --job-type SchedulerJob --hostname "$${HOSTNAME}"']
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-dag-processor: # "reads the recipes": parses the files in dags/
+    <<: *airflow-common
+    command: dag-processor
+    healthcheck:
+      test: ["CMD-SHELL", 'airflow jobs check --job-type DagProcessorJob --hostname "$${HOSTNAME}"']
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
 volumes:
   storage-data:
+  airflow-db-data:
