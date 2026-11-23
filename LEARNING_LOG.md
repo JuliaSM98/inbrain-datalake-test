@@ -209,3 +209,47 @@ Versión final:
 - Ejercicio de Júlia, correcto y con tests en verde:
   `P_signal = mean(signal²)`, `P_noise = P_signal / 10^(SNR/10)`, `sigma = sqrt(P_noise)`.
 - En disco local hay que crear la carpeta antes de escribir; en S3 no (no hay carpetas, solo keys).
+
+---
+
+## Paso 5: Data contract y validación (23/11/2026)
+
+**Qué hicimos**
+- `contracts/session_contract.yaml` v1.0.0 (decisiones de Júlia: `unknown_fields: warn`, umbral
+  "más del 25%" = con 8 canales aguanta 2 fail, unicidad por archivo de origen).
+- `quality/checks.py`: una función por regla → lista de `Violation(check_name, reason, owner)`.
+  Todas las reglas se ejecutan siempre; si falta un campo, las demás reglas lo saltan.
+- `quality/validate.py`: `validate_upload` → `accepted` / `quarantined` / `skipped`, con `raw_uri`,
+  `sha256`, `contract_version`, `channel_flags`, `drift_fields`.
+- Ejercicios de Júlia: `channel_flag` (15 tests de límites) y `check_uniqueness` (4 casos).
+- Demo `playground/step5_validate_raw.py`: 51 aceptadas, 9 en cuarentena, **0 escapadas,
+  0 falsas alarmas**; segunda pasada (backfill): **51 skipped**, 9 quarantined.
+
+**Lecciones**
+- **Duplicado = otro archivo, misma sesión. Reprocesado = el mismo archivo otra vez** (no-op).
+  Si un backfill generara cuarentenas → falsas alarmas → nadie mira la cuarentena.
+- **`raw_uri` = dónde está** el archivo; **`sha256` = qué contiene** (huella). El tamaño no sirve
+  para saber si dos archivos son iguales (0001 y 0035 miden lo mismo).
+- Capturar **solo** `ArrowInvalid` en el Parquet: un fallo de red no es culpa del archivo → que la
+  tarea falle y Airflow reintente (si no, falso positivo en cuarentena).
+- Leer **solo el footer** del Parquet para validarlo (barato). Corrupto → "magic bytes not found".
+- `yaml.safe_load`, nunca `yaml.load` (puede crear objetos arbitrarios).
+- `now` como parámetro → tests deterministas.
+- Límites (`<` vs `<=`, `>` vs `>=`) → donde se esconden los bugs → se testean.
+
+**Errores y soluciones**
+- `channel_flag`: ternario encadenado de 125 caracteres → reescrito como 3 `if` legibles.
+- `check_uniqueness`: el `reason` del duplicado decía "with a different hash" (inexacto: un duplicado
+  es otro archivo, la huella puede coincidir) → el `reason` es lo que lee una persona: debe ser exacto.
+  Condición redundante y `raise NotImplementedError` inalcanzable → eliminados.
+- Ruff B018 (atributo sin usar) → `pq.read_metadata(f)`.
+
+**Preguntas de entrevista del Paso 5 (feedback)**
+- *Corrupted/non-conforming file*: Júlia respondió solo el caso "ilegible → cuarentena con owner".
+  Faltaba: raw intacto, todos los motivos + versión de contrato + run_id, nunca arreglar en silencio,
+  el resto del lote sigue.
+- *Duplicate vs reprocessed*: respuesta vaga ("hay una validación"). Hay que decir **cómo**:
+  session_id + raw_uri + sha256 → mismo archivo = no-op, otro archivo = duplicado, misma ruta con
+  otra huella = raw modificado.
+- *Why a versioned contract*: "más fácil de cambiar" es cierto pero corto. Añadir: acuerdo entre
+  equipos legible sin Python, cambios por revisión, cada registro guarda la versión → trazabilidad.

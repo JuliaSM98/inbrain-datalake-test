@@ -7,6 +7,10 @@ All checks always run, so a bad upload reports ALL its problems at once.
 from dataclasses import dataclass
 from datetime import datetime
 
+import pyarrow as pa
+import pyarrow.fs as pafs
+import pyarrow.parquet as pq
+
 
 @dataclass
 class Violation:
@@ -97,6 +101,62 @@ def unknown_fields(metadata: dict, contract: dict) -> list[str]:
     """Fields not in the contract (schema drift). NOT a violation: the contract says 'warn'."""
     known = set(contract["required_fields"]) | set(contract["optional_fields"])
     return sorted(set(metadata) - known)
+
+
+def check_signal_file(fs: pafs.FileSystem, key: str, contract: dict) -> list[Violation]:
+    """The .parquet next to the .json must exist and be a readable Parquet file."""
+    owner = contract["owners"]["signal_file"]
+    if fs.get_file_info(key).type == pafs.FileType.NotFound:
+        return [Violation("signal_file_readable", f"signal file not found: {key}", owner)]
+    try:
+        with fs.open_input_file(key) as f:
+            pq.read_metadata(f)  # reads ONLY the footer (end of the file): cheap
+    except pa.ArrowInvalid as e:
+        # ONLY "this is not a valid Parquet" -> the FILE is bad -> quarantine.
+        # A network error (OSError) is NOT caught: the file isn't bad, so the task must fail
+        # and Airflow must retry. Quarantining it would be a false positive.
+        return [Violation("signal_file_readable", f"unreadable Parquet: {e}", owner)]
+    return []
+
+
+def check_uniqueness(
+    session_id: str,
+    raw_uri: str,
+    sha256: str,
+    existing: dict[str, tuple[str, str]],
+    contract: dict,
+) -> tuple[str, list[Violation]]:
+    """EXERCISE (Júlia): the 4 cases of the uniqueness table (contract section 5).
+
+    existing = sessions ALREADY in standardised.sessions:
+               {session_id: (raw_uri, sha256)}   e.g. {"S-000001": ("s3://raw/.../upload_0001.parquet",
+                                                                    "a3f5...")}
+    Return (decision, violations):
+      session_id not in existing                      -> ("new", [])
+      same raw_uri AND same sha256                    -> ("skip", [])          retry / backfill
+      different raw_uri                               -> ("duplicate", [one Violation])
+      same raw_uri but different sha256               -> ("modified", [one Violation])
+
+    The Violations: check_name="uniqueness", a clear `reason` that says which file already had
+    that session, owner=contract["owners"]["uniqueness"].
+
+    HINT 1: `if session_id not in existing:` first. Then unpack: `old_uri, old_sha = existing[...]`.
+    HINT 2: order matters: check "different raw_uri" before comparing hashes.
+    Tests: uv run pytest tests/test_quality.py -v -k uniqueness
+    """
+    if session_id not in existing:
+        return ("new", [])
+    owner = contract["owners"]["uniqueness"]
+    old_uri, old_sha = existing[session_id]
+    if raw_uri == old_uri and sha256 == old_sha:
+        return ("skip", [])  # the same file again: retry / backfill
+    if raw_uri != old_uri:
+        # A duplicate = ANOTHER FILE (the hash may or may not differ: don't claim it does).
+        reason = f"session_id {session_id} already ingested from {old_uri}"
+        return ("duplicate", [Violation("uniqueness", reason, owner)])
+    # Only case left: same path, different hash -> the raw zone was modified.
+    reason = f"session_id {session_id}: file {old_uri} changed since it was ingested"
+    return ("modified", [Violation("uniqueness", reason, owner)])
 
 
 def channel_flag(channel: dict, rules: dict) -> str:

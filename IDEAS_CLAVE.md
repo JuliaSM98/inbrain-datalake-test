@@ -67,6 +67,18 @@
    o **gestionarlas él** (Snowflake-managed).
 3. Tiene su propio **Time Travel** y **Zero-Copy Clone** (conceptos parecidos a los de Iceberg).
 
+## ✅ Calidad de datos y data contracts
+1. **Data contract** = acuerdo escrito y **versionado** productor↔consumidor: esquema, reglas,
+   qué pasa si no se cumple y **a quién avisar** (owner). Reglas en YAML, no en código.
+2. **Lo que no cumple se rechaza (cuarentena con motivo), nunca se arregla en silencio.**
+3. Una función por regla; **se reportan todos los problemas a la vez**.
+4. Campo desconocido → **warn** (schema drift registrado), no reject.
+5. **Duplicado ≠ reprocesado**: unicidad por `session_id` **+ archivo de origen**
+   (`raw_uri` = dónde está, `sha256` = qué contiene). Mismo archivo → no-op.
+   Misma ruta con otra huella → raw modificado → alarma (ALCOA+ *Original*).
+6. Errores transitorios (red) **no** van a cuarentena: que falle la tarea y se reintente.
+7. Cada registro guarda la **versión del contrato** con la que se validó (trazabilidad).
+
 ## 🌀 Apache Airflow (orquestador)
 1. **Idempotencia** (preparada en 2b): reintentos y backfills ejecutan lo mismo varias veces →
    cada paso debe poder ejecutarse 2 veces sin cambiar nada la segunda (`ensure_column`).
