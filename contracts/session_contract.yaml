@@ -1,0 +1,69 @@
+# Data contract for session uploads arriving in the raw zone.
+#
+# ILLUSTRATIVE ONLY: thresholds are invented for this learning project, NOT clinical values.
+# Rules live here (not in code) so they can be reviewed, versioned and changed without
+# touching Python. Every validated record will store the contract version it was checked with.
+
+contract: session_upload
+version: 1.0.0
+
+# Who gets notified when a rule fails (fictional teams). Goes to quarantine.owner.
+owners:
+  metadata: device-integration-team # the JSON is malformed or has invalid values
+  signal_quality: recording-team # electrodes with bad impedance / SNR
+  signal_file: device-integration-team # the Parquet file is missing or unreadable
+  uniqueness: data-platform-team # the same session arrived twice
+
+# --- 1. SCHEMA: which fields must be in the JSON, and their type -------------------------------
+required_fields:
+  session_id: string
+  subject_code: string
+  study_id: string
+  phase: string
+  recorded_at: timestamp # ISO 8601 in UTC, e.g. 2026-11-16T09:53:00Z
+  device_id: string
+  sampling_rate_hz: integer
+  n_channels: integer
+  channels: list
+
+optional_fields:
+  firmware_version: string # absent today; will appear later (schema evolution)
+
+# A field not listed above (schema drift): WARN, don't reject. A harmless firmware update must
+# not quarantine every upload. The warning is recorded (visible), never silent.
+unknown_fields: warn
+
+# --- 2. METADATA RULES ------------------------------------------------------------------------
+allowed_values:
+  phase: [acute, semi_chronic, chronic]
+  sampling_rate_hz: [500, 1000, 2000]
+
+recorded_at_not_in_future: true
+n_channels_must_match_channels_list: true # n_channels == len(channels)
+
+# --- 3. SIGNAL QUALITY, per channel -----------------------------------------------------------
+# Each channel gets a flag: ok / warning / fail.
+channel_quality:
+  impedance_kohm: # LOWER is better
+    ok_max: 1000 # <= 1000            -> ok
+    warning_max: 2000 # 1000 < x <= 2000  -> warning,  > 2000 -> fail
+  snr_db: # HIGHER is better
+    ok_min: 10 # >= 10              -> ok
+    warning_min: 6 # 6 <= x < 10        -> warning,  < 6 -> fail
+  # The WORST of the two flags wins (e.g. impedance ok + snr fail -> fail).
+
+# If MORE THAN (>) this % of channels are 'fail', the WHOLE session goes to quarantine.
+# With 8 channels: 2 fail = 25% -> passes; 3 fail = 37.5% -> quarantine. (Boundary is tested.)
+max_failed_channels_pct: 25
+
+# --- 4. SIGNAL FILE -------------------------------------------------------------------------------
+signal_file_must_be_readable: true # the .parquet next to the .json opens correctly
+
+# --- 5. UNIQUENESS (and idempotency) --------------------------------------------------------------
+# Key: session_id. If it already exists in standardised.sessions, look at WHICH FILE it came from
+# (raw_uri = where the signal file is, source_sha256 = fingerprint of its content):
+uniqueness:
+  key: session_id
+  same_file_same_hash: skip # retry / backfill of the SAME file -> do nothing (idempotent)
+  different_file: quarantine # another upload with the same session -> real duplicate
+  same_file_different_hash: quarantine # the file changed at the same path -> raw was modified!
