@@ -52,6 +52,11 @@
     lecturas **y** borrados (p. ej. GDPR).
 20. ✅ **Over-partitioning**: muchas particiones pequeñas → *small files*. Particionar solo cuando cada
     partición tiene cientos de MB; si no, sin partición / `months` / `bucket` / sort order + min/max.
+21. ✅ **ACID por tabla, no entre tablas**: con varias tablas, el **marcador al final** (la tabla que
+    lee la unicidad) y lo anterior **idempotente** (`overwrite` con filtro = delete+insert en 1 commit).
+22. ✅ **Partición ≠ nº de archivos**: cada commit escribe archivos nuevos; 5 appends diarios = 5
+    archivos en la misma partición mensual → **compactación** programada los junta.
+23. ✅ Cada ejecución = un snapshot → "¿cómo estaba la tabla tras el día X?" es un time travel.
 
 ## 🗂️ AWS Glue Data Catalog (el catálogo)
 1. Es el **catálogo**: sabe qué tablas existen y dónde está su `metadata.json` actual.

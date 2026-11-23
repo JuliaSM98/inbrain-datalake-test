@@ -253,3 +253,32 @@ Versión final:
   otra huella = raw modificado.
 - *Why a versioned contract*: "más fácil de cambiar" es cierto pero corto. Añadir: acuerdo entre
   equipos legible sin Python, cambios por revisión, cada registro guarda la versión → trazabilidad.
+
+---
+
+## Paso 6: Escribir en Iceberg (23/11/2026)
+
+**Qué hicimos**
+- `lakehouse/tables.py`: `standardised.sessions` (13 col.), `standardised.channel_metrics` (8 col.,
+  con `recorded_at` añadido), `quarantine.rejected_files` (9 col., una fila por regla que falla).
+  Partición `months(recorded_at)`; cuarentena sin partición. Creación idempotente
+  (`create_table_if_not_exists`).
+- `lakehouse/writer.py`: ① `channel_metrics` overwrite por `session_id` → ② `sessions` append
+  (marcador, al final) → ③ cuarentena overwrite por `raw_uri`. Un commit por tabla y ejecución.
+- `pipeline.py`: `ingest(json_keys, run_id)` = lo que hará cada ejecución de Airflow.
+- `tests/test_idempotency.py`: ejecutar dos veces no cambia nada; **caída simulada entre las dos
+  tablas + reintento → sin duplicados** (8 filas de canales por sesión).
+- Demo por días: 51 sesiones, 408 canales, 9 rechazos; backfill del 16 y 18 → nada cambia.
+
+**Lecciones**
+- **Iceberg es ACID por tabla, no entre tablas.** Pregunta de Júlia: "¿escribir sessions antes?" →
+  peor: el reintento ve `skip` y los canales se pierden **en silencio**. Solución: marcador al final
+  + lo anterior idempotente (overwrite con filtro = delete + insert en un commit).
+- **Partición ≠ número de archivos.** 5 ejecuciones = 5 archivos en la MISMA partición de noviembre
+  (cada append escribe un archivo nuevo: inmutables). La compactación los junta, pero solo dentro
+  de una partición → por día no habría nada que juntar.
+- **Jerarquía**: study → subject (persona, pseudónimo) → session (una grabación, business key que
+  asigna el sistema de grabación) → channels. `upload_id` = nombre del archivo, no identidad.
+- Simplificación detectada: el generador elige `phase` al azar por sesión (en la realidad no
+  retrocede). Posible regla multi-sesión: "la fase de un sujeto no puede retroceder".
+- `UserWarning: Delete operation did not match any records` en el primer overwrite: inofensivo.
