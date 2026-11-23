@@ -135,3 +135,44 @@ qué aprendimos, decisiones y por qué, errores y cómo se resolvieron.
   como pares `(clave, valor)`. Intento 1 añadía bien, intento 2 petaba con
   `ValueError: Cannot add column, name already exists`. Solución: `name in schema.column_names`.
   Lección: comprobar con un caso que **debería dar True** (no solo el que da False).
+
+---
+
+## Paso 2c: Hidden partitioning y partition evolution (23/11/2026)
+
+**Qué hicimos** (`playground/step2c_partitioning.py`, tabla `toy.sessions`)
+- Spec `days(recorded_at)`: 1 append de 12 filas → 4 archivos (uno por día), sin columna "día".
+- Pruning filtrando solo por `recorded_at`: 1 día → 1/4 archivos; `snr_db > 100` → 0/4 (min/max).
+- Delete de un día entero → `deleted-data-files=1, added=0` (**metadata-only**);
+  delete `snr_db < 6` → 2 reescritos (copy-on-write).
+- Evolución `day → month`: archivos viejos con `spec_id=0`, nuevos con `spec_id=1`; una consulta
+  planifica con ambos. `683` = meses desde 1970-01 (las transforms producen enteros).
+- Demo de zona horaria: S-006 (19/11 23:30 UTC = 20/11 00:30 Madrid) está en la partición **UTC 19/11**;
+  filtro "20/11 hora de Madrid" abre particiones 19 y 20 y devuelve S-006 y S-007 (correcto).
+
+**Respuestas de diseño de Júlia y corrección**
+1. *Over-partitioning*: ❌ el riesgo no es "un archivo muy grande" sino **muchos archivos diminutos**
+   (1-3 filas por día). Coste fijo por archivo (abrir, footer, GET a S3, entradas en manifests).
+   Con 50-100 sesiones (y aun con miles/día, porque cada fila son ~200 bytes) → **sin partición o
+   `months`**. Regla: particionar cuando cada partición tiene cientos de MB/GB.
+2. *Zona horaria*: ❌ las transforms de Iceberg sobre `timestamptz` se calculan **siempre en UTC**.
+   ✅ el resultado sí es correcto, pero porque **la partición solo decide qué archivos se abren;
+   el filtro se aplica a los valores reales**. Particionar nunca cambia resultados, solo coste.
+   (En Hive, filtrando por una columna `fecha_dia` mal calculada, el resultado sería **incorrecto**.)
+3. *channel_metrics*: 🟡 la intuición (juntar los canales de una sesión) es buena, pero `identity(session_id)`
+   = una partición por sesión = over-partitioning. Mejor `bucket(N, session_id)` o **ordenar por
+   session_id** (sort order) y dejar que min/max haga el pruning; o añadir `recorded_at` y `months`.
+
+**Errores y soluciones**
+- `NotInstalledError: pyiceberg_core needs to be installed` al escribir en tabla particionada →
+  añadir extra `pyiceberg[pyiceberg-core]` (transforms en Rust, iceberg-rust).
+- `ruff` falló pero el commit pasó porque `| grep` ocultaba el código de salida → commit de arreglo.
+
+---
+
+## Hallazgo antes del Paso 3: MinIO ya no se distribuye como imagen (23/11/2026)
+- `quay.io/minio/minio:latest` → **401 UNAUTHORIZED**; `minio/minio` en Docker Hub → **no existe**.
+- Consecuencia: el `docker-compose.yml` de `mrb-db-hub` (que usa `quay.io/minio/minio` sin tag)
+  **fallará en cualquier máquina que no tenga la imagen en caché** (CI, portátil nuevo).
+- Alternativas disponibles hoy (Docker Hub): RustFS `1.0.6` (Apache-2.0), SeaweedFS `4.55`
+  (Apache-2.0), Garage `v2.5.0` (AGPL).

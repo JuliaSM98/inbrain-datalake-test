@@ -40,6 +40,18 @@
     Parquet suelto / Hive emparejan **por nombre** → renames rotos y zombis.
 14. ✅ Cambiar el esquema **no crea snapshot** ni reescribe datos: solo un metadata.json con nuevo schema-id.
 15. ✅ Drop column **no borra físicamente** los datos → borrado real (GDPR) = reescribir + expirar.
+16. ✅ **Hidden partitioning**: partición = *transform* de una columna real (`days(recorded_at)`,
+    `months`, `hours`, `bucket(N, id)`, `truncate`). Iceberg calcula el valor al escribir y lo guarda
+    en los manifests; el usuario filtra por `recorded_at` y obtiene pruning. Sin columna artificial
+    → nadie puede calcularla mal. Las carpetas `x=...` son solo cosméticas: Iceberg no las usa.
+17. ✅ **Partición = coste, nunca resultado**: decide qué archivos se abren; el filtro se aplica a los
+    valores reales. Transforms de tiempo en **UTC**.
+18. ✅ **Partition evolution**: cada archivo recuerda su `spec_id`; cambiar day→month no reescribe nada
+    y las consultas planifican con todos los specs a la vez.
+19. ✅ **Delete alineado con la partición = metadata-only** (no reescribe). Particionar bien abarata
+    lecturas **y** borrados (p. ej. GDPR).
+20. ✅ **Over-partitioning**: muchas particiones pequeñas → *small files*. Particionar solo cuando cada
+    partición tiene cientos de MB; si no, sin partición / `months` / `bucket` / sort order + min/max.
 
 ## 🗂️ AWS Glue Data Catalog (el catálogo)
 1. Es el **catálogo**: sabe qué tablas existen y dónde está su `metadata.json` actual.
@@ -64,6 +76,10 @@
 ## 🪣 S3 / MinIO (almacenamiento de objetos)
 1. Objetos inmutables en buckets con keys; no hay carpetas reales, solo prefijos.
    Para "cambiar" un archivo se escribe otro nuevo → por eso hace falta Iceberg encima.
+2. "S3" es también un **protocolo/API**: MinIO, RustFS, SeaweedFS, Garage, Ceph... lo implementan.
+   Por eso el mismo código vale en local y en AWS cambiando el endpoint.
+3. **Riesgo de proveedor**: MinIO dejó de distribuir imágenes (2025) → los composes con
+   `minio:latest` se rompen. Fijar versiones **y** tener alternativa (el protocolo S3 lo permite).
 
 ## 🧰 Buenas prácticas transversales
 1. **Reproducibilidad**: versiones fijadas (`uv.lock`, tags de imágenes Docker, semillas aleatorias).
