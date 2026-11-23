@@ -34,6 +34,12 @@
     La retención es decisión de **negocio/compliance**, no solo técnica.
 12. ✅ **Parquet = formato de archivo; data file = rol** (lo referencia un manifest). Los motores
     nunca listan carpetas: un Parquet no referenciado no existe para la tabla.
+13. ✅ **Schema evolution por field_id** (guardado también *dentro* de cada Parquet):
+    add → `null` en archivos viejos · rename → solo metadatos · drop + re-add mismo nombre → ID nuevo,
+    **sin datos zombis** · cambios de tipo solo seguros (int→long, float→double).
+    Parquet suelto / Hive emparejan **por nombre** → renames rotos y zombis.
+14. ✅ Cambiar el esquema **no crea snapshot** ni reescribe datos: solo un metadata.json con nuevo schema-id.
+15. ✅ Drop column **no borra físicamente** los datos → borrado real (GDPR) = reescribir + expirar.
 
 ## 🗂️ AWS Glue Data Catalog (el catálogo)
 1. Es el **catálogo**: sabe qué tablas existen y dónde está su `metadata.json` actual.
@@ -50,7 +56,10 @@
 3. Tiene su propio **Time Travel** y **Zero-Copy Clone** (conceptos parecidos a los de Iceberg).
 
 ## 🌀 Apache Airflow (orquestador)
-1. (se completa en el paso 7)
+1. **Idempotencia** (preparada en 2b): reintentos y backfills ejecutan lo mismo varias veces →
+   cada paso debe poder ejecutarse 2 veces sin cambiar nada la segunda (`ensure_column`).
+   Migraciones de esquema: en **una sola tarea previa**, no en tareas paralelas por archivo.
+2. (se completa en el paso 7)
 
 ## 🪣 S3 / MinIO (almacenamiento de objetos)
 1. Objetos inmutables en buckets con keys; no hay carpetas reales, solo prefijos.

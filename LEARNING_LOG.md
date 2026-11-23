@@ -109,3 +109,29 @@ qué aprendimos, decisiones y por qué, errores y cómo se resolvieron.
 - Respuesta de entrevista "recover accidental delete" demasiado corta → versión completa: parar el
   daño, localizar snapshot malo, comprobar que el bueno no está expirado, verificar con time travel,
   rollback **solo si no hubo escrituras válidas después** (si no, reinsertar las filas borradas).
+
+---
+
+## Paso 2b: Schema evolution (23/11/2026)
+
+**Qué hicimos** (`playground/step2b_schema_evolution.py`, ejercicio `exercise_ensure_column.py`)
+- `add_column("firmware_version")` → schema-id 0→1, **0 Parquet nuevos, 0 snapshots nuevos**, solo un
+  metadata.json más. Filas viejas → `None`.
+- Append con la columna nueva: conviven archivos escritos con 2 esquemas.
+- `rename_column("value", "amplitude_uv")` → abrimos el Parquet más antiguo con PyArrow: dentro sigue
+  llamándose `value` con `PARQUET:field_id=3`. **Iceberg empareja por field_id, no por nombre.**
+- `string → long` → `ValidationError` (solo *type promotions* seguras: int→long, float→double, decimal).
+- Drop `sensor` + add `sensor` → nuevo field_id 5 → valores viejos **no** reaparecen (no hay zombis).
+
+**Lecciones**
+- Cambiar esquema = solo metadatos (nuevo schema-id); los datos no se tocan.
+- Drop de columna **no borra físicamente** los datos (siguen en los Parquet viejos). Para borrado real
+  (GDPR) → reescribir archivos + expirar snapshots.
+- **Idempotencia** de migraciones: `ensure_column` añade solo si falta, no hace nada si ya está,
+  y **falla en voz alta** si el tipo no coincide.
+
+**Errores y soluciones**
+- `name in schema` → **siempre False**: `Schema` es un modelo pydantic y `in` itera sus atributos
+  como pares `(clave, valor)`. Intento 1 añadía bien, intento 2 petaba con
+  `ValueError: Cannot add column, name already exists`. Solución: `name in schema.column_names`.
+  Lección: comprobar con un caso que **debería dar True** (no solo el que da False).

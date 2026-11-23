@@ -29,8 +29,20 @@ METADATA_DIR = LOCAL_WAREHOUSE_DIR / "toy/readings/metadata"
 
 
 def ensure_column(table: Table, name: str, field_type: IcebergType) -> str:
-    # TODO(Júlia): your code here
-    raise NotImplementedError
+    schema = table.schema()
+    # FIX: `name in schema` is ALWAYS False. Schema is a pydantic model, so `in` iterates over
+    # its attributes as (key, value) pairs, not over column names. Use `column_names`.
+    is_field = name in schema.column_names
+    if not is_field:
+        with table.update_schema() as update:
+            update.add_column(name, field_type)
+        return "added"
+    field = schema.find_field(name)
+    if field.field_type != field_type:
+        raise ValueError(
+            f"Column '{name}' exists with type {field.field_type}, but {field_type} was requested"
+        )
+    return "already present"
 
 
 def n_metadata() -> int:
