@@ -4,7 +4,7 @@ Creates a NEW toy table `toy.sessions` partitioned by days(recorded_at).
 Run:  uv run python playground/step2c_partitioning.py   (it recreates the table every time)
 """
 
-from datetime import UTC, datetime
+from datetime import datetime
 
 import pyarrow as pa
 from pyiceberg.partitioning import PartitionField, PartitionSpec
