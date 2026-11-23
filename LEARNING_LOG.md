@@ -282,3 +282,33 @@ Versión final:
 - Simplificación detectada: el generador elige `phase` al azar por sesión (en la realidad no
   retrocede). Posible regla multi-sesión: "la fase de un sujeto no puede retroceder".
 - `UserWarning: Delete operation did not match any records` en el primer overwrite: inofensivo.
+
+---
+
+## Paso 7: Airflow (23/11/2026)
+
+**7a – Conceptos** (analogía cocina): DAG = receta, task = paso, DAG run = hacerla una vez,
+scheduler = jefe, executor/workers = cocineros, metadata DB = libreta, UI = ventana.
+Cada run procesa **su** día aunque se ejecute más tarde; retries/backfills → idempotencia;
+XCom solo datos pequeños (rutas, no archivos). Júlia acertó las 3 preguntas.
+
+**7b – Arrancar Airflow 3.4.0**: compose oficial simplificado a LocalExecutor (sin redis/worker/
+flower/triggerer/cli): postgres + init + api-server + scheduler + dag-processor (~850 MB).
+Imagen propia = `apache/airflow:3.4.0` + librerías (Airflow fijado; `pip check` sin conflictos;
+PyArrow 25 dentro vs 26 en el Mac). Código montado en `/opt/project` + `PYTHONPATH`;
+dentro de Docker S3 es `http://storage:9000` (gana a `.env` porque `override=False`).
+Hubo que parar 16 contenedores de otros proyectos (Docker tiene 8 GB).
+
+**7c – Hola mundo**: `@dag`/`@task` de `airflow.sdk` (Airflow 3; en Airflow 2 era
+`airflow.decorators`). `greet(say_hello())` dibuja la receta (orden + XCom), no la ejecuta.
+
+**7d – DAG real `ingest_sessions`**: `[list_files] → [ingest_day] → [summary]`,
+`CronDataIntervalTimetable("0 0 * * *")` (cada run cubre un día y se lanza al terminar),
+`catchup=False`, `max_active_runs=1` (SQLite = un solo escritor). Airflow inyecta
+`data_interval_start` y `run_id` por nombre de parámetro; imports pesados dentro de las tareas.
+Júlia: backfill del 16 → 12 sesiones con `run_id` de Airflow.
+- **Sorpresa**: `airflow tasks test ... 2026-11-16` procesó el **15**: un lanzamiento manual con
+  fecha = "como si fuera esa hora" → último día completo. Backfill del 16 → procesa el 16.
+  Regla: para un día concreto, **backfill de ese día**.
+- Airflow 3.4: por defecto `create_cron_data_intervals=False` (un `@daily` no tiene intervalo) →
+  usamos `CronDataIntervalTimetable` explícito.
