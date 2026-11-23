@@ -23,6 +23,17 @@
    (`register_table` con el último metadata.json). Pero el catálogo es la *source of truth* del
    metadata.json vigente → necesita backup.
 8. ✅ Coste: muchos commits pequeños → muchos archivos pequeños (*small files problem*) → **compaction**.
+9. ✅ **Delete = copy-on-write**: se reescribe cada archivo con alguna fila afectada (los viejos se quedan
+   para time travel). Si el delete coincide con la partición, solo se quitan archivos de la lista.
+   Alternativa: **merge-on-read** (delete files pequeños aplicados al leer; Spark/Trino).
+10. ✅ **Time travel** por snapshot id o por timestamp. **Tag** = nombre fijo para un snapshot
+    (datasets ML reproducibles) y lo **protege** de expiración. **Rollback** mueve "current" atrás
+    **sin borrar** el snapshot malo → audit trail intacto.
+11. ✅ **Expire snapshots** = quitar snapshots viejos de los metadatos → ya **no hay time travel** a ellos.
+    Los archivos que nadie referencia se borran (Spark/Trino) o quedan como **orphans** (PyIceberg).
+    La retención es decisión de **negocio/compliance**, no solo técnica.
+12. ✅ **Parquet = formato de archivo; data file = rol** (lo referencia un manifest). Los motores
+    nunca listan carpetas: un Parquet no referenciado no existe para la tabla.
 
 ## 🗂️ AWS Glue Data Catalog (el catálogo)
 1. Es el **catálogo**: sabe qué tablas existen y dónde está su `metadata.json` actual.

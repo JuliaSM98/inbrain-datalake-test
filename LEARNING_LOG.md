@@ -70,3 +70,42 @@ qué aprendimos, decisiones y por qué, errores y cómo se resolvieron.
 - *Lose the catalog?* → Los datos no se pierden (archivos autodescriptivos, `register_table`), se pierde
   el **puntero**. Pero el catálogo es la *source of truth* de cuál es el metadata.json vigente
   (puede haber metadata.json de commits fallidos) → necesita backup.
+
+---
+
+## Paso 2a: Time travel, tags, rollback y expire (22-23/11/2026)
+
+**Qué hicimos** (`playground/step2a_time_travel.py`, ejercicio `exercise_expire_snapshots.py`)
+- Delete "por error" de `sensor == 'B'` → snapshot `overwrite` con `deleted-data-files=3`,
+  `added-data-files=3`; Parquet en disco 3 → 6.
+- Time travel por id (`scan(snapshot_id=)`) y por timestamp (`snapshot_as_of_timestamp`).
+- Tag `before_incident` sobre el snapshot bueno; rollback → el snapshot malo **sigue en el historial**
+  (`snapshot-log`: good → BAD → good) → audit trail completo.
+- Ejercicio: `table.maintenance.expire_snapshots().older_than(now).commit()`.
+
+**Resultado del ejercicio vs predicciones de Júlia**
+| | Predicción | Real | Por qué |
+|---|---|---|---|
+| a) snapshots | 2 | **1** | Tras el rollback, `main` y el tag apuntan al **mismo** snapshot |
+| b) tag | sigue | **sigue** ✅ | Tags y heads de ramas están **protegidos** |
+| c) data files referenciados | 6 | **3** | El snapshot actual solo ve sus 3 Parquet originales: es una foto, no la suma del historial |
+| d) Parquet en disco | 6 | **6** ✅ (motivo distinto) | **PyIceberg 0.12 expira solo metadatos, no borra archivos** → 3 *orphans* |
+| e) time travel al malo | funciona | **`ValueError: Snapshot not found`** | El tag protegía al bueno, no al malo; sin snapshot en metadata no hay forma de saber qué archivos lo formaban |
+
+**Lecciones**
+- **Copy-on-write**: un delete reescribe *cada archivo que contiene alguna fila afectada*, no "un archivo
+  por fila". Si el delete coincide con la partición → *metadata-only delete* (no se reescribe nada).
+- **Expirar ≠ borrar archivos.** En Spark/Trino `expire_snapshots` también borra los archivos que ya
+  nadie referencia; en PyIceberg 0.12 no → hace falta limpieza de **orphan files** (`remove_orphan_files`
+  en Spark/Trino). Si no, el almacenamiento crece para siempre.
+- Tras expirar, **el time travel a ese snapshot es imposible** aunque los Parquet sigan en disco.
+  La retención es decisión de negocio/compliance.
+- **Parquet = formato; data file = rol** (archivo referenciado por un manifest). Un Parquet no
+  referenciado es un *orphan* y ningún motor lo ve (los motores no listan carpetas).
+
+**Errores y soluciones**
+- `table.manage_snapshots().expire_snapshots()` → `AttributeError`. Expire vive en
+  `table.maintenance`, y el método es `older_than(datetime)`, no `"now"`.
+- Respuesta de entrevista "recover accidental delete" demasiado corta → versión completa: parar el
+  daño, localizar snapshot malo, comprobar que el bueno no está expirado, verificar con time travel,
+  rollback **solo si no hubo escrituras válidas después** (si no, reinsertar las filas borradas).

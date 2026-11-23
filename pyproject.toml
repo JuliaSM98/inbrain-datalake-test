@@ -33,6 +33,10 @@ target-version = "py312"
 # UP:  pyupgrade (modern Python syntax)
 select = ["E", "F", "I", "B", "UP"]
 
+[tool.ruff.lint.per-file-ignores]
+# Exercises contain Júlia's free-text predictions in docstrings: don't police their line length.
+"playground/exercise_*.py" = ["E501"]
+
 # -------------------------------------------------------------- pytest (tests)
 [tool.pytest.ini_options]
 testpaths = ["tests"]
