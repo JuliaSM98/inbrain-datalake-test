@@ -176,3 +176,36 @@ qué aprendimos, decisiones y por qué, errores y cómo se resolvieron.
   **fallará en cualquier máquina que no tenga la imagen en caché** (CI, portátil nuevo).
 - Alternativas disponibles hoy (Docker Hub): RustFS `1.0.6` (Apache-2.0), SeaweedFS `4.55`
   (Apache-2.0), Garage `v2.5.0` (AGPL).
+
+---
+
+## Paso 3: Almacenamiento S3 con RustFS (23/11/2026)
+- `docker-compose.yml`: `rustfs/rustfs:1.0.6` (versión fijada) + job `create-buckets` con la AWS CLI
+  oficial (idempotente: `head-bucket` antes de `mb`). En AWS real los buckets se crean con IaC.
+- `config.py` lee `.env` (git-ignored); `get_catalog()` añade `s3.*` solo si existen (en AWS: nada).
+- Mismo catálogo SQLite, warehouse `s3://lakehouse/`. Cada tabla guarda **su propia location**.
+- Iceberg guarda **rutas absolutas** → mover una tabla = reescribirla (y se pierde el historial).
+- `docker compose down -v` → el catálogo queda con un **puntero colgante** (`FileNotFoundError`).
+  Inverso del Paso 1: catálogo y almacenamiento se respaldan **juntos**.
+- Dos `metadata.json` en una tabla nueva = 2 commits (`create_table` vacía + `append`). Los dos
+  `.avro` no son "dos manifests": uno es la **manifest list** y otro el **manifest**.
+
+---
+
+## Paso 4: Generador de subidas sintéticas (23/11/2026)
+
+**Decisión: simplificar.** Primera versión con senoides + ruido gaussiano + SNR objetivo →
+demasiado procesamiento de señal para un proyecto cuyo objetivo es *data engineering*.
+Versión final:
+- El dispositivo **informa** impedancia y SNR por canal en el JSON → la calidad es comparar con umbrales.
+- La "señal" es un Parquet de números aleatorios: solo existe para practicar "archivo pesado en S3,
+  la tabla guarda URI + hash".
+- Archivos `upload_<n>` (nombre del que sube); el `session_id` va **dentro** → los duplicados se
+  detectan **por contenido, no por nombre de archivo**.
+- 8 canales, 60 subidas, 12 por día (16-20/11), 9 malas con 6 tipos de defecto.
+- Raw inmutable: si el JSON ya existe, `skipped` → generador idempotente.
+
+**Lo que se aprendió por el camino (versión descartada)**
+- Ejercicio de Júlia, correcto y con tests en verde:
+  `P_signal = mean(signal²)`, `P_noise = P_signal / 10^(SNR/10)`, `sigma = sqrt(P_noise)`.
+- En disco local hay que crear la carpeta antes de escribir; en S3 no (no hay carpetas, solo keys).
