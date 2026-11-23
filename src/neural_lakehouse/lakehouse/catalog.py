@@ -1,39 +1,42 @@
 """Single entry point to the Iceberg catalog.
 
 DESIGN DECISION: every part of the project gets the catalog through `get_catalog()`.
-Nothing else knows *which* catalog we use. Today it is a local SQLite catalog with a
-local-folder warehouse; later it becomes a REST catalog + MinIO, and in real AWS it
-would be Glue + S3. Moving between them should only change the properties below
-(or configuration), never the pipeline code.
+Nothing else knows *which* catalog or storage we use. Moving between them only changes
+configuration (`.env` / environment variables), never the pipeline code.
 
-    Step 1 (today):  type=sql,  uri=sqlite:///...,  warehouse=file:///...
-    Step 3:          warehouse=s3://lakehouse/  (+ s3.endpoint pointing to MinIO)
-    Step 8 (~Glue):  type=rest, uri=http://catalog:8181/...
-    Real AWS:        type=glue  (warehouse=s3://my-bucket/...)
+    Step 1-2:        type=sql (SQLite),  warehouse=file:///.../.warehouse
+    Step 3 (today):  type=sql (SQLite),  warehouse=s3://lakehouse/  + s3.endpoint -> RustFS
+    Later (~Glue):   type=rest, uri=http://catalog:8181/...
+    Real AWS:        type=glue, warehouse=s3://my-bucket/  (no endpoint, no keys: IAM role)
 """
-
-from pathlib import Path
 
 from pyiceberg.catalog import Catalog, load_catalog
 
-# Repo root = three levels up from this file (src/neural_lakehouse/lakehouse/catalog.py)
-REPO_ROOT = Path(__file__).resolve().parents[3]
+from neural_lakehouse.config import get_settings
 
-# Local, git-ignored folder that holds BOTH the catalog DB and the table files.
-LOCAL_WAREHOUSE_DIR = REPO_ROOT / ".warehouse"
+# Kept for the playground scripts of steps 1-2 (local-folder tables still live here).
+LOCAL_WAREHOUSE_DIR = get_settings().catalog_dir
 
 
 def get_catalog(name: str = "local") -> Catalog:
     """Return the Iceberg catalog used by the project."""
-    LOCAL_WAREHOUSE_DIR.mkdir(exist_ok=True)
-    return load_catalog(
-        name,
-        **{
-            # "sql" = a catalog stored in a relational DB (here SQLite, one file).
-            "type": "sql",
-            # Where the catalog itself lives: just a table name -> metadata.json pointer.
-            "uri": f"sqlite:///{LOCAL_WAREHOUSE_DIR / 'catalog.db'}",
-            # Where table files (data/ + metadata/) are written by default.
-            "warehouse": LOCAL_WAREHOUSE_DIR.as_uri(),
-        },
-    )
+    s = get_settings()
+    s.catalog_dir.mkdir(exist_ok=True)
+
+    props: dict[str, str] = {
+        # The CATALOG: a SQLite file that maps table name -> current metadata.json.
+        "type": "sql",
+        "uri": f"sqlite:///{s.catalog_dir / 'catalog.db'}",
+        # The STORAGE: default location for new tables' data/ and metadata/.
+        "warehouse": s.warehouse,
+    }
+    # How to reach S3. Only the values that are set are passed: on real AWS there is no
+    # endpoint and no keys (the SDK uses the IAM role), so these would all be absent.
+    s3_props = {
+        "s3.endpoint": s.s3_endpoint,
+        "s3.access-key-id": s.s3_access_key,
+        "s3.secret-access-key": s.s3_secret_key,
+        "s3.region": s.s3_region,
+    }
+    props |= {k: v for k, v in s3_props.items() if v}
+    return load_catalog(name, **props)

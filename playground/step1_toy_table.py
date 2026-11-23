@@ -29,7 +29,12 @@ schema = Schema(
     NestedField(field_id=2, name="sensor", field_type=StringType(), required=False),
     NestedField(field_id=3, name="value", field_type=DoubleType(), required=False),
 )
-table = catalog.create_table("toy.readings", schema=schema)
+# Explicit LOCATION: since step 3 the default warehouse is s3://lakehouse/, but these
+# playground tables must stay in the local folder. Each table stores its own location;
+# the catalog's "warehouse" is only the DEFAULT for tables created without one.
+table = catalog.create_table(
+    "toy.readings", schema=schema, location=(LOCAL_WAREHOUSE_DIR / "toy/readings").as_uri()
+)
 print(f"Created table. Current metadata file:\n  {table.metadata_location}\n")
 
 

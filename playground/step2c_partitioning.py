@@ -12,7 +12,7 @@ from pyiceberg.schema import Schema
 from pyiceberg.transforms import DayTransform, MonthTransform
 from pyiceberg.types import DoubleType, NestedField, StringType, TimestamptzType
 
-from neural_lakehouse.lakehouse.catalog import get_catalog
+from neural_lakehouse.lakehouse.catalog import LOCAL_WAREHOUSE_DIR, get_catalog
 
 catalog = get_catalog()
 catalog.create_namespace_if_not_exists("toy")
@@ -28,7 +28,12 @@ schema = Schema(
 spec = PartitionSpec(
     PartitionField(source_id=2, field_id=1000, transform=DayTransform(), name="recorded_at_day")
 )
-table = catalog.create_table("toy.sessions", schema=schema, partition_spec=spec)
+table = catalog.create_table(
+    "toy.sessions",
+    schema=schema,
+    partition_spec=spec,
+    location=(LOCAL_WAREHOUSE_DIR / "toy/sessions").as_uri(),  # stays local (see step 1)
+)
 
 
 def sessions(rows: list[tuple[str, str, float]]) -> pa.Table:
