@@ -8,10 +8,24 @@ All the real work is our own code (neural_lakehouse.pipeline), which is idempote
 so retries and backfills can re-run any day safely.
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from airflow.sdk import dag, task
 from airflow.timetables.interval import CronDataIntervalTimetable
+
+
+def alert_on_failure(context) -> None:
+    """Called when a task fails for good (all retries used). SIMULATED alert: only a log line.
+
+    In a real system this would send an email / Slack / Teams message to the on-call person.
+    NOTE: bad DATA never gets here (it goes to quarantine and the task succeeds);
+    only broken infrastructure or code does.
+    """
+    ti = context["ti"]
+    print(
+        f"🚨 ALERT: task '{ti.task_id}' of DAG '{ti.dag_id}' FAILED after {ti.try_number} attempts "
+        f"(run {context['run_id']}). Error: {context.get('exception')}"
+    )
 
 
 @dag(
@@ -23,6 +37,13 @@ from airflow.timetables.interval import CronDataIntervalTimetable
     # One run at a time: our local catalog is a SQLite file, which allows a single writer.
     # (With Glue or a REST catalog, several days could run in parallel.)
     max_active_runs=1,
+    # Defaults for EVERY task of this DAG.
+    default_args={
+        "retries": 3,  # transient failures (network, S3 restarting): try again, up to 4 attempts
+        "retry_delay": timedelta(seconds=30),  # wait between attempts
+        "execution_timeout": timedelta(minutes=10),  # a hung task is killed, not waited forever
+        "on_failure_callback": alert_on_failure,  # all attempts failed -> tell a human
+    },
     tags=["lakehouse"],
 )
 def ingest_sessions():
